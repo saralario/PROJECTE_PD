@@ -2,44 +2,59 @@
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_Sensor.h>
-#include <DHT.h>
+#include <Adafruit_AHTX0.h>
 #include <MPU6050.h>
 #include <ESPAsyncWebServer.h>
 
 // --- Configuració ---
-#define DHTPIN 14
-#define DHTTYPE DHT22
-#define VIBRATOR_PIN 27
-#define BUTTON_PIN 12
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
+#define DHTPIN 14   // Pin del sensor DHT22
+#define DHTTYPE DHT22  // Tipus de sensor
+#define VIBRATOR_PIN 27   // Pin del motor de vibració
+#define BUTTON_PIN 12    // Pin del botó
+#define SCREEN_WIDTH 128   // Llargada pantalla OLED
+#define SCREEN_HEIGHT 32   // Amplada pantalla OLED
 #define OLED_RESET -1
 
 // --- Objectes ---
-DHT dht(DHTPIN, DHTTYPE);
-MPU6050 mpu;
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-AsyncWebServer server(80);
+Adafruit_AHTX0 aht;   // Objecte AHT10   
+MPU6050 mpu;          // Objetce Accelerometre
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);   // Objecte pantala
+AsyncWebServer server(80);    // Servidor de la web
 
 // --- Estat del sistema ---
-bool systemActive = false;
-unsigned long lastReminder = 0;
-unsigned long reminderInterval = 60000; // 1 minut per proves
-String activityLevel = "Baix";
-float temperature = 0.0;
-float humidity = 0.0;
+bool systemActive = false;        // Inicialitza l'estat del sitema com apagat
+unsigned long lastReminder = 0;   // Inicialitza el temps que ha passat des de l'últim recordatori a 0
+unsigned long reminderInterval = 60000;     
+String activityLevel = "Baix";    // Inicialitza el nivell d'activitat a baix tenit Alt mitja i baix
+float temperature = 0.0;    // Declaració de la temperatura inicialitzada a 0.0
+float humidity = 0.0;       // Declaració de la humitat inicialitzada a 0.0
 
-// --- WiFi (substitueix per la teva info) ---
+// --- WiFi ---
 const char* ssid = "NomDeLaXarxa";
 const char* password = "Contrasenya";
+
+// --- Forward declarations de funcions ---
+void setupWebServer();
+void updateSensors();
+void updateActivityLevel();
+void calculateReminderInterval();
+void triggerReminder();
+void updateDisplay();
 
 // --- Setup ---
 void setup() {
   Serial.begin(115200);
   pinMode(VIBRATOR_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  dht.begin();
+
+
+ if (!aht.begin()) {
+  Serial.println("No s'ha trobat el sensor AHT10!");
+  while (1) delay(10);
+}
+
   mpu.initialize();
+  
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500); Serial.print(".");
@@ -77,10 +92,13 @@ void loop() {
   }
 }
 
-// --- Funcions ---
+// --- Implementacions de funcions ---
+
 void updateSensors() {
-  temperature = dht.readTemperature();
-  humidity = dht.readHumidity();
+  sensors_event_t humidityEvent, tempEvent;
+  aht.getEvent(&humidityEvent, &tempEvent);
+  temperature = tempEvent.temperature;
+  humidity = humidityEvent.relative_humidity;
 }
 
 void updateActivityLevel() {
@@ -94,11 +112,11 @@ void updateActivityLevel() {
 
 void calculateReminderInterval() {
   if (activityLevel == "Alt" || temperature > 30 || humidity < 30)
-    reminderInterval = 15 * 60 * 1000; // cada 15 minuts
+    reminderInterval = 15 * 60 * 1000;
   else if (activityLevel == "Mitjà")
-    reminderInterval = 30 * 60 * 1000; // cada 30 minuts
+    reminderInterval = 30 * 60 * 1000;
   else
-    reminderInterval = 45 * 60 * 1000; // cada 45 minuts
+    reminderInterval = 45 * 60 * 1000;
 }
 
 void triggerReminder() {
