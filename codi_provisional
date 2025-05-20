@@ -1,0 +1,131 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <MPU6050.h>
+#include <ESPAsyncWebServer.h>
+
+// --- Configuració ---
+#define DHTPIN 14
+#define DHTTYPE DHT22
+#define VIBRATOR_PIN 27
+#define BUTTON_PIN 12
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+
+// --- Objectes ---
+DHT dht(DHTPIN, DHTTYPE);
+MPU6050 mpu;
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+AsyncWebServer server(80);
+
+// --- Estat del sistema ---
+bool systemActive = false;
+unsigned long lastReminder = 0;
+unsigned long reminderInterval = 60000; // 1 minut per proves
+String activityLevel = "Baix";
+float temperature = 0.0;
+float humidity = 0.0;
+
+// --- WiFi (substitueix per la teva info) ---
+const char* ssid = "NomDeLaXarxa";
+const char* password = "Contrasenya";
+
+// --- Setup ---
+void setup() {
+  Serial.begin(115200);
+  pinMode(VIBRATOR_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  dht.begin();
+  mpu.initialize();
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500); Serial.print(".");
+  }
+  Serial.println("\nWiFi connectat: " + WiFi.localIP().toString());
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("Error OLED")); while (true);
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  setupWebServer();
+}
+
+// --- Loop principal ---
+void loop() {
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    delay(300);
+    systemActive = !systemActive;
+    Serial.println(systemActive ? "Sistema actiu" : "Sistema apagat");
+    delay(1000);
+  }
+
+  if (systemActive) {
+    updateSensors();
+    updateActivityLevel();
+    calculateReminderInterval();
+    if (millis() - lastReminder > reminderInterval) {
+      triggerReminder();
+      lastReminder = millis();
+    }
+    updateDisplay();
+  }
+}
+
+// --- Funcions ---
+void updateSensors() {
+  temperature = dht.readTemperature();
+  humidity = dht.readHumidity();
+}
+
+void updateActivityLevel() {
+  int16_t ax, ay, az;
+  mpu.getAcceleration(&ax, &ay, &az);
+  int magnitude = abs(ax) + abs(ay) + abs(az);
+  if (magnitude > 50000) activityLevel = "Alt";
+  else if (magnitude > 20000) activityLevel = "Mitjà";
+  else activityLevel = "Baix";
+}
+
+void calculateReminderInterval() {
+  if (activityLevel == "Alt" || temperature > 30 || humidity < 30)
+    reminderInterval = 15 * 60 * 1000; // cada 15 minuts
+  else if (activityLevel == "Mitjà")
+    reminderInterval = 30 * 60 * 1000; // cada 30 minuts
+  else
+    reminderInterval = 45 * 60 * 1000; // cada 45 minuts
+}
+
+void triggerReminder() {
+  digitalWrite(VIBRATOR_PIN, HIGH);
+  delay(500);
+  digitalWrite(VIBRATOR_PIN, LOW);
+  Serial.println("Recordatori: Beu aigua!");
+}
+
+void updateDisplay() {
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.print("Temp: "); display.print(temperature); display.println("C");
+  display.print("Hum: "); display.print(humidity); display.println("%");
+  display.print("Activitat: "); display.println(activityLevel);
+  display.display();
+}
+
+void setupWebServer() {
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    String html = "<html><body><h2>Estat del sistema</h2>";
+    html += "<p>Temperatura: " + String(temperature) + " C</p>";
+    html += "<p>Humitat: " + String(humidity) + " %</p>";
+    html += "<p>Nivell d'activitat: " + activityLevel + "</p>";
+    html += "<p>Propera alerta en: " + String((reminderInterval - (millis() - lastReminder)) / 60000) + " min</p>";
+    html += "</body></html>";
+    request->send(200, "text/html", html);
+  });
+  server.begin();
+}
