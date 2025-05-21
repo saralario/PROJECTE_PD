@@ -33,7 +33,7 @@ float humidity = 0.0;       // Declaració de la humitat inicialitzada a 0.0
 const char* ssid = "NomDeLaXarxa";
 const char* password = "Contrasenya";
 
-// --- Forward declarations de funcions ---
+// ---  declaracions anticipades de funcions ---
 void setupWebServer();
 void updateSensors();
 void updateActivityLevel();
@@ -44,64 +44,68 @@ void updateDisplay();
 // --- Setup ---
 void setup() {
   Serial.begin(115200);
-  pinMode(VIBRATOR_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(VIBRATOR_PIN, OUTPUT); // Pin del motor de vibració (per controlar el motor de vibració) 
+  pinMode(BUTTON_PIN, INPUT_PULLUP); // Pin del botó
 
 
- if (!aht.begin()) {
+ if (!aht.begin()) {    // Inicia el sensor de temperatura
   Serial.println("No s'ha trobat el sensor AHT10!");
   while (1) delay(10);
 }
 
-  mpu.initialize();
+  mpu.initialize(); // Inicia el sensor MPU6050 (acceleròmetre/giroscopi)
   
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500); Serial.print(".");
-  }
-  Serial.println("\nWiFi connectat: " + WiFi.localIP().toString());
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("Error OLED")); while (true);
-  }
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  setupWebServer();
-}
-
-// --- Loop principal ---
-void loop() {
-  if (digitalRead(BUTTON_PIN) == LOW) {
+  WiFi.begin(ssid, password); // intenta connectar-se a la xarxa wifi
+  while (WiFi.stif (digitalRead(BUTTON_PIN) == LOW) {
     delay(300);
     systemActive = !systemActive;
     Serial.println(systemActive ? "Sistema actiu" : "Sistema apagat");
     delay(1000);
   }
 
+  
+  Serial.println("\nWiFi connectat: " + WiFi.localIP().toString()); // mostra la IP local ("web")
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {   //a dins del if, inicia la pantalla OLED
+    Serial.println(F("Error OLED")); while (true);
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  setupWebServer();  //Crea la pàgina web accesible via la IP local de l'ESP32
+}
+
+// --- Loop principal ---
+void loop() {
+  if (digitalRead(BUTTON_PIN) == LOW) { // Gestió del boto
+    delay(300);
+    systemActive = !systemActive;  //canvi de l'estat del sistema, passa d'apagat a encés o a l'invers
+    Serial.println(systemActive ? "Sistema actiu" : "Sistema apagat");  //condició ? valor_si_true : valor_si_false;
+    delay(1000);
+  }
+
   if (systemActive) {
-    updateSensors();
-    updateActivityLevel();
-    calculateReminderInterval();
-    if (millis() - lastReminder > reminderInterval) {
-      triggerReminder();
-      lastReminder = millis();
-    }
-    updateDisplay();
+    updateSensors();  // llegeix el sensor de temperatura
+    updateActivityLevel();   // calcula l'activitat amb l'acceleròmetre
+    calculateReminderInterval();   // Ajusta freqüència de recordatoris
+    if (millis() - lastReminder > reminderInterval) {   //lastReminder guarda el temps de l'última vegada que es va activar un recordatori
+      triggerReminder();    // Activa la vibració
+      lastReminder = millis(); // la funció millis() retorna el nombre de mil·lisegons que han passat des que es va iniciar el programa     }
+    updateDisplay();  // Mostra dades a l'OLED
   }
 }
 
 // --- Implementacions de funcions ---
 
-void updateSensors() {
+void updateSensors() {     //sensor de temperatura
   sensors_event_t humidityEvent, tempEvent;
   aht.getEvent(&humidityEvent, &tempEvent);
   temperature = tempEvent.temperature;
   humidity = humidityEvent.relative_humidity;
 }
 
-void updateActivityLevel() {
+void updateActivityLevel() {  //sensor accelerometre
   int16_t ax, ay, az;
   mpu.getAcceleration(&ax, &ay, &az);
   int magnitude = abs(ax) + abs(ay) + abs(az);
@@ -110,7 +114,7 @@ void updateActivityLevel() {
   else activityLevel = "Baix";
 }
 
-void calculateReminderInterval() {
+void calculateReminderInterval() {  //càlcul de interval de recordatori de l'avís
   if (activityLevel == "Alt" || temperature > 30 || humidity < 30)
     reminderInterval = 15 * 60 * 1000;
   else if (activityLevel == "Mitjà")
@@ -119,14 +123,14 @@ void calculateReminderInterval() {
     reminderInterval = 45 * 60 * 1000;
 }
 
-void triggerReminder() {
+void triggerReminder() {    //activació del motor vibrador (vibra durant mig segon quan s'activa el recordatori)
   digitalWrite(VIBRATOR_PIN, HIGH);
   delay(500);
   digitalWrite(VIBRATOR_PIN, LOW);
   Serial.println("Recordatori: Beu aigua!");
 }
 
-void updateDisplay() {
+void updateDisplay() {  //Actualització de la pantalla
   display.clearDisplay();
   display.setCursor(0,0);
   display.print("Temp: "); display.print(temperature); display.println("C");
@@ -135,7 +139,7 @@ void updateDisplay() {
   display.display();
 }
 
-void setupWebServer() {
+void setupWebServer() {   //crea la pàgina web
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String html = "<html><body><h2>Estat del sistema</h2>";
     html += "<p>Temperatura: " + String(temperature) + " C</p>";
