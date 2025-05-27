@@ -1,0 +1,162 @@
+#include <WiFi.h> // WIFI
+#include <Wire.h>  //I2C
+#include <LiquidCrystal_I2C.h> //PANTALLA OLED
+#include <Adafruit_Sensor.h>
+#include <Adafruit_AHTX0.h> //sensor emperatura
+#include <Adafruit_MPU6050.h> // sensor accelerometre
+#include <ESPAsyncWebServer.h> //web
+
+
+// --- Configuració ---
+#define BUTTON_PIN 12    // Pin del botó
+#define SCREEN_WIDTH 20   // Llargada pantalla OLED
+#define SCREEN_HEIGHT 4   // Amplada pantalla OLED
+#define OLED_RESET -1
+
+
+// --- Objectes ---
+Adafruit_AHTX0 aht;   // Objecte AHT10  
+Adafruit_MPU6050 mpu; // Objetce Accelerometre
+LiquidCrystal_I2C lcd(0x27, 20, 4);   // Objecte pantala
+AsyncWebServer server(80);    // Servidor de la web
+
+// --- WiFi ---
+const char* ssid = "NomDeLaXarxa";
+const char* password = "Contrasenya";
+
+
+// ---  declaracions anticipades de funcions ---
+void setupWebServer();
+void updateSensors();
+void updateActivityLevel();
+void calculateReminderInterval();
+void triggerReminder();
+void updateDisplay();
+
+
+// --- Setup ---
+void setup() {
+ Serial.begin(115200);
+ pinMode(BUTTON_PIN, INPUT_PULLUP); // Pin del botó
+
+
+
+
+if (!aht.begin()) {    // Inicia el sensor de temperatura
+ Serial.println("No s'ha trobat el sensor AHT10!");
+ while (1) delay(10);
+}
+
+
+ mpu.begin(); // Inicia el sensor MPU6050 (acceleròmetre/giroscopi)
+  WiFi.begin(ssid, password); // intenta connectar-se a la xarxa wifi
+ while (WiFi.status() != WL_CONNECTED) {
+ delay(500);
+ Serial.print(".");
+ }
+
+
+  Serial.println("\nWiFi connectat: " + WiFi.localIP().toString()); // mostra la IP local ("web")
+
+
+  // iniciar sistema si el botó està premut
+ if (digitalRead(BUTTON_PIN) == LOW) {
+   systemActive = true;
+   Serial.println("Sistema actiu (iniciat amb botó premut)");
+ }
+
+
+ lcd.init(); // Inicialitza la pantalla LCD (equivalent a begin())
+ lcd.backlight(); // Activa la llum de fons (si la pantalla en té)
+ lcd.clear(); // Neteja la pantalla abans d'escriure
+
+
+ setupWebServer();  //Crea la pàgina web accesible via la IP local de l'ESP32
+}
+
+
+// --- Loop principal ---
+void loop() {
+ if (digitalRead(BUTTON_PIN) == LOW) { // Gestió del boto
+   delay(300);
+   systemActive = !systemActive;  //canvi de l'estat del sistema, passa d'apagat a encés o a l'invers
+   Serial.println(systemActive ? "Sistema actiu" : "Sistema apagat");  //condició ? valor_si_true : valor_si_false;
+   delay(1000);
+ }
+
+
+ if (systemActive) {
+   updateSensors();  // llegeix el sensor de temperatura
+   updateActivityLevel();   // calcula l'activitat amb l'acceleròmetre
+   calculateReminderInterval();   // Ajusta freqüència de recordatoris
+   if (millis() - lastReminder > reminderInterval) {   //lastReminder guarda el temps de l'última vegada que es va activar un recordatori
+     triggerReminder();    // Activa la vibració
+     lastReminder = millis(); // la funció millis() retorna el nombre de mil·lisegons que han passat des que es va iniciar el programa     }
+   updateDisplay();  // Mostra dades a l'OLED
+   }
+ }
+}
+
+
+// --- Implementacions de funcions ---
+
+
+void updateSensors() {     //sensor de temperatura
+ sensors_event_t humidityEvent, tempEvent;
+ aht.getEvent(&humidityEvent, &tempEvent);
+ temperature = tempEvent.temperature;
+ humidity = humidityEvent.relative_humidity;
+}
+
+
+void updateActivityLevel() {  //sensor accelerometre
+ int16_t ax, ay, az;
+ mpu.getAccelerometer(&ax, &ay, &az);
+ int magnitude = abs(ax) + abs(ay) + abs(az);
+ if (magnitude > 50000) activityLevel = "Alt";
+ else if (magnitude > 20000) activityLevel = "Mitjà";
+ else activityLevel = "Baix";
+}
+
+
+void calculateReminderInterval() {  //càlcul de interval de recordatori de l'avís
+ if (activityLevel == "Alt" || temperature > 30 || humidity < 30)
+   reminderInterval = 15 * 60 * 1000;
+ else if (activityLevel == "Mitjà")
+   reminderInterval = 30 * 60 * 1000;
+ else
+   reminderInterval = 45 * 60 * 1000;
+}
+
+
+
+
+void updateDisplay() {
+ lcd.clear();
+  lcd.setCursor(0, 0);
+ lcd.print("Temp: ");
+ lcd.print(temperature);
+ lcd.print(" C");
+  lcd.setCursor(0, 1);
+ lcd.print("Hum: ");
+ lcd.print(humidity);
+ lcd.print(" %");
+  lcd.setCursor(0, 2);
+ lcd.print("Activitat:");
+  lcd.setCursor(0, 3);
+ lcd.print(activityLevel);
+}
+
+
+void setupWebServer() {   //crea la pàgina web
+ server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+   String html = "<html><body><h2>Estat del sistema</h2>";
+   html += "<p>Temperatura: " + String(temperature) + " C</p>";
+   html += "<p>Humitat: " + String(humidity) + " %</p>";
+   html += "<p>Nivell d'activitat: " + activityLevel + "</p>";
+   html += "<p>Propera alerta en: " + String((reminderInterval - (millis() - lastReminder)) / 60000) + " min</p>";
+   html += "</body></html>";
+   request->send(200, "text/html", html);
+ });
+ server.begin();
+}
