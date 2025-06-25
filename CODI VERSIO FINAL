@@ -1,0 +1,194 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <MPU9250_asukiaaa.h>
+#include <Adafruit_AHTX0.h>
+#include <WiFi.h>
+#include <WebServer.h>
+
+// --- Wi-Fi Access Point ---
+const char* ssid = "BeuAigua";
+const char* password = "12345678";
+WebServer server(80);
+
+// --- Display LCD ---
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// --- Sensors ---
+MPU9250_asukiaaa mySensor;
+Adafruit_AHTX0 aht;
+
+// --- Botó ---
+const int botoPin = 0;
+bool sistemaActiu = false;
+bool botoAnterior = HIGH;
+
+// --- Variables ---
+int passos = 0;
+float accel_threshold = 1.2;
+unsigned long lastStepTime = 0;
+unsigned long stepDelay = 300;
+int ultimLlindarMostrat = -1;
+int avisosHidratacio = 0;
+
+// --- Històrics ---
+#define MAX_SESSIONS 7
+int historialDistancia[MAX_SESSIONS] = {0};
+int historialAvisos[MAX_SESSIONS] = {0};
+int indexSessio = 0;
+
+// --- Generació HTML ---
+String htmlPage() {
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<meta http-equiv='refresh' content='5'>";
+  html += "<title>Beu Aigua!</title>";
+  html += "<style>body{font-family:sans-serif;margin:20px;} .card{border:1px solid #ccc;padding:10px;margin-bottom:10px;} .bar{background:#4CAF50;height:20px;margin:2px 0;}</style></head><body>";
+
+  html += "<h2>Estat del sistema: ";
+  html += sistemaActiu ? "<span style='color:green'>Actiu</span>" : "<span style='color:red'>Aturat</span>";
+  html += "</h2>";
+
+  html += "<div class='card'>";
+  html += "<b>Distància recorreguda:</b> " + String(passos) + " m<br>";
+  html += "<b>Temperatura:</b> " + String(mySensor.accelX(), 1) + " °C<br>"; // Pots posar la temp real si la tens
+  html += "<b>Humitat:</b> " + String(mySensor.accelY(), 1) + " %<br>";
+  html += "<b>Missatges d'hidratació:</b> " + String(avisosHidratacio) + "<br>";
+  html += "</div>";
+
+  html += "<h3>Gràfic d'activitat (m)</h3><div class='card'>";
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    int val = historialDistancia[i];
+    html += "<div>Dia " + String(i+1) + ": " + String(val) + " m<div class='bar' style='width:" + String(val) + "px'></div></div>";
+  }
+  html += "</div>";
+
+  html += "<h3>Gràfic d'avisos</h3><div class='card'>";
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    int val = historialAvisos[i];
+    html += "<div>Dia " + String(i+1) + ": " + String(val) + " avisos<div class='bar' style='width:" + String(val*10) + "px;background:#f44336'></div></div>";
+  }
+  html += "</div></body></html>";
+  return html;
+}
+
+void handleRoot() {
+  server.send(200, "text/html", htmlPage());
+}
+
+void resetDadesSessio() {
+  historialDistancia[indexSessio] = passos;
+  historialAvisos[indexSessio] = avisosHidratacio;
+  indexSessio = (indexSessio + 1) % MAX_SESSIONS;
+  passos = 0;
+  avisosHidratacio = 0;
+  ultimLlindarMostrat = -1;
+}
+
+void setup() {
+  Wire.begin();
+  Serial.begin(115200);
+  pinMode(botoPin, INPUT_PULLUP);
+
+  lcd.init();
+  lcd.backlight();
+
+  mySensor.setWire(&Wire);
+  mySensor.beginAccel();
+  mySensor.beginGyro();
+
+  if (!aht.begin()) {
+    lcd.setCursor(0, 0);
+    lcd.print("Error AHT!");
+    while (1) delay(10);
+  }
+
+  WiFi.softAP(ssid, password);
+  Serial.println("Access Point creat");
+  Serial.print("SSID: "); Serial.println(ssid);
+  Serial.print("IP: "); Serial.println(WiFi.softAPIP());
+
+  server.on("/", handleRoot);
+  server.begin();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Prem el boto...");
+}
+
+void loop() {
+  server.handleClient();
+
+  bool botoActual = digitalRead(botoPin);
+  if (botoActual == LOW && botoAnterior == HIGH) {
+    sistemaActiu = !sistemaActiu;
+    lcd.clear();
+
+    if (sistemaActiu) {
+      lcd.setCursor(0, 0);
+      lcd.print("Sistema engegat");
+      delay(1000);
+    } else {
+      resetDadesSessio();
+      lcd.setCursor(0, 0);
+      lcd.print("Sistema aturat");
+      delay(1000);
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Prem el boto...");
+      return;
+    }
+  }
+  botoAnterior = botoActual;
+  if (!sistemaActiu) return;
+
+  mySensor.accelUpdate();
+  float ax = mySensor.accelX();
+  float ay = mySensor.accelY();
+  float az = mySensor.accelZ();
+  float a_total = sqrt(ax * ax + ay * ay + az * az);
+
+  sensors_event_t humidity, temp;
+  aht.getEvent(&humidity, &temp);
+
+  unsigned long now = millis();
+  if (a_total > accel_threshold && (now - lastStepTime) > stepDelay) {
+    passos++;
+    lastStepTime = now;
+  }
+
+  lcd.setCursor(0, 0);
+  lcd.print("Temp: ");
+  lcd.print(temp.temperature, 1);
+  lcd.print(" C   ");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Hum:  ");
+  lcd.print(humidity.relative_humidity, 1);
+  lcd.print(" %   ");
+
+  lcd.setCursor(0, 2);
+  lcd.print("Distancia: ");
+  lcd.print(passos);
+  lcd.print(" m   ");
+
+  int llindar = 99999;
+  if (temp.temperature >= 30) llindar = 500;
+  else if (temp.temperature >= 24) llindar = 5;
+
+  if (passos >= llindar) {
+    if (passos % llindar == 0 && passos != ultimLlindarMostrat) {
+      lcd.setCursor(0, 3);
+      lcd.print("Hidrata't ara!     ");
+      ultimLlindarMostrat = passos;
+      avisosHidratacio++;
+    } else if (passos != ultimLlindarMostrat) {
+      lcd.setCursor(0, 3);
+      lcd.print("                    ");
+    }
+  } else {
+    lcd.setCursor(0, 3);
+    lcd.print("                    ");
+    ultimLlindarMostrat = -1;
+  }
+
+  delay(500);
+}
